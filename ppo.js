@@ -1,49 +1,101 @@
-const tf = require('@tensorflow/tfjs')
-// const nqdm = require('nqdm')
-
-const { FunctionalCallback, DictCallback, BaseCallback } = require('./callbacks.js')
+// Check if node
+// if (typeof window === 'undefined') {
+if (typeof module === 'object' && module.exports) {
+    var tf = require('@tensorflow/tfjs-node-gpu')
+}
 
 function log () {
-    console.log('[PPO]', ...arguments)
+    // console.log('[PPO]', ...arguments)
 }
 
-function logProbCategorical(logits, x) {
-    const numActions = logits.shape[1]
-    const logprobabilitiesAll = tf.logSoftmax(logits)
-    var logprobability = tf.sum(
-        tf.mul(tf.oneHot(x, numActions), logprobabilitiesAll), 1 //axis
-    )
-    return logprobability
+class BaseCallback {
+    constructor() {
+        this.nCalls = 0
+    }
+
+    _onStep(alg) { return true }
+    onStep(alg) {
+        this.nCalls += 1
+        return this._onStep(alg)
+    }
+
+    _onTrainingStart(alg) {}
+    onTrainingStart(alg) {
+        this._onTrainingStart(alg)
+    }
+
+    _onTrainingEnd(alg) {}
+    onTrainingEnd(alg) {
+        this._onTrainingEnd(alg)
+    }
+
+    _onRolloutStart(alg) {}
+    onRolloutStart(alg) {
+        this._onRolloutStart(alg)
+    }
+
+    _onRolloutEnd(alg) {}
+    onRolloutEnd(alg) {
+        this._onRolloutEnd(alg)
+    }
 }
 
-function logProbNormal(loc, scale, x) {
-    const logUnnormalized = tf.mul(
-        -0.5,
-        tf.square(
-            tf.sub(
-                tf.div(x, scale),
-                tf.div(loc, scale)
-            )
-        )
-    )
-    const logNormalization = tf.add(
-        tf.scalar(0.5 * Math.log(2.0 * Math.PI)),
-        tf.log(scale)
-    )
-    return tf.sub(logUnnormalized, logNormalization)
+class FunctionalCallback extends BaseCallback {
+    constructor(callback) {
+        super()
+        this.callback = callback
+    }
+
+    _onStep(alg) {
+        if (this.callback) {
+            return this.callback(alg)
+        }
+        return true
+    }
+}
+
+class DictCallback extends BaseCallback {
+    constructor(callback) {
+        super()
+        this.callback = callback
+    }
+
+    _onStep(alg) {
+        if (this.callback && this.callback.onStep) {
+            return this.callback.onStep(alg)
+        }
+        return true
+    }
+    
+    _onTrainingStart(alg) {
+        if (this.callback && this.callback.onTrainingStart) {
+            this.callback.onTrainingStart(alg)
+        }
+    }
+
+    _onTrainingEnd(alg) {
+        if (this.callback && this.callback.onTrainingEnd) {
+            this.callback.onTrainingEnd(alg)
+        }
+    }
+
+    _onRolloutStart(alg) {
+        if (this.callback && this.callback.onRolloutStart) {
+            this.callback.onRolloutStart(alg)
+        }
+    }
+
+    _onRolloutEnd(alg) {
+        if (this.callback && this.callback.onRolloutEnd) {
+            this.callback.onRolloutEnd(alg)
+        }
+    }
 }
 
 
 
-function discountedCumulativeSums (arr, coeff) {
-    var res = []
-    var s = 0
-    arr.reverse().forEach(v => {
-        s = v + s * coeff
-        res.push(s)
-    })
-    return res.reverse()
-}
+
+
 
 const bufferConfigDefault = {
     gamma: 0.99,
@@ -59,7 +111,7 @@ class Buffer {
     }
 
     add(observation, action, reward, value, logprobability) {
-        // log('>', observation)
+        // log('!', action)
         this.observationBuffer.push(observation.slice(0))
         this.actionBuffer.push(action)
         this.rewardBuffer.push(reward)
@@ -68,30 +120,40 @@ class Buffer {
         this.pointer += 1
     }
 
+    discountedCumulativeSums (arr, coeff) {
+        var res = []
+        var s = 0
+        arr.reverse().forEach(v => {
+            s = v + s * coeff
+            res.push(s)
+        })
+        return res.reverse()
+    }
+
     finishTrajectory(lastValue) {
-        log('>', this.rewardBuffer, this.rewardBuffer.length)
+        //log('>', this.rewardBuffer, this.rewardBuffer.length)
         var rewards = this.rewardBuffer
             .slice(this.trajectoryStartIndex, this.pointer)
             .concat(lastValue * this.gamma)
-        log('>', rewards, rewards.length)
+        //log('>', rewards, rewards.length)
         var values = this.valueBuffer
             .slice(this.trajectoryStartIndex, this.pointer)
             .concat(lastValue)
-        log('>', values, values.length)
+        //log('>', values, values.length)
         var deltas = rewards
             .slice(0, -1)
             .map((reward, ri) => reward - (values[ri] - this.gamma * values[ri + 1]))
-        log('deltas>', deltas.length)
+        //log('deltas>', deltas.length)
         
         this.advantageBuffer = this.advantageBuffer
-            .concat(discountedCumulativeSums(deltas, this.gamma * this.lam))
+            .concat(this.discountedCumulativeSums(deltas, this.gamma * this.lam))
         this.returnBuffer = this.returnBuffer
-            .concat(discountedCumulativeSums(rewards, this.gamma).slice(0, -1))
+            .concat(this.discountedCumulativeSums(rewards, this.gamma).slice(0, -1))
                 
         this.trajectoryStartIndex = this.pointer
 
         // log('>', this.observationBuffer.length)
-        // log('>', this.actionBuffer.length)
+        // log('!', this.actionBuffer)
         // log('>', this.advantageBuffer.length)
         // log('>', this.returnBuffer.length)
         // log('>', this.rewardBuffer.length)
@@ -101,8 +163,10 @@ class Buffer {
     }
 
     get() {
-        var advantageMean = tf.mean(this.advantageBuffer).arraySync()
-        var advantageStd = tf.moments(this.advantageBuffer).variance.sqrt().arraySync()
+        const [advantageMean, advantageStd] = tf.tidy(() => [
+            tf.mean(this.advantageBuffer).arraySync(),
+            tf.moments(this.advantageBuffer).variance.sqrt().arraySync()
+        ])
         
         this.advantageBuffer = this.advantageBuffer
             .map(advantage => (advantage - advantageMean) / advantageStd)
@@ -130,6 +194,7 @@ class Buffer {
 
 }
 
+/*
 class ActorCriticPolicy {
     constructor(policyConfig) {
         const policyConfigDefault = {
@@ -151,14 +216,14 @@ class ActorCriticPolicy {
     _makeFeaturesExtractor() {
     }
 }
+*/
 
 class PPO {
     constructor(env, config) {
         const configDefault = {
-            nSteps: 200,
-            policyIterations: 80,
-            policyLearningRate: 3e-4,
-            valueIterations: 80,
+            nSteps: 512,
+            nEpochs: 10,
+            policyLearningRate: 1e-3,
             valueLearningRate: 1e-3,
             clipRatio: 0.2,
             targetKL: 0.01,
@@ -167,27 +232,40 @@ class PPO {
 
         this.config = Object.assign({}, configDefault, config)
         this.env = env
+        if ((this.env.actionSpace.class == 'Discrete') && !this.env.actionSpace.dtype) {
+            this.env.actionSpace.dtype = 'int32'
+        } else if ((this.env.actionSpace.class == 'Box') && !this.env.actionSpace.dtype) {
+            this.env.actionSpace.dtype = 'float32'
+        }
         this.numTimesteps = 0
         this.lastObservation = null
 
         var input = tf.layers.input({shape: this.env.observationSpace.shape})
-        var l = tf.layers.dense({units: 16, activation: 'relu'}).apply(input)
+        var l = tf.layers.dense({units: 32, activation: 'relu'}).apply(input)
+        l = tf.layers.dense({units: 32, activation: 'relu'}).apply(l)
         if (this.env.actionSpace.class == 'Discrete') {
-            l = tf.layers.dense({units: this.env.actionSpace.n, activation: 'linear'}).apply(l)
+            l = tf.layers.dense({
+                units: this.env.actionSpace.n, 
+                kernelInitializer: 'glorotNormal'
+            }).apply(l)
         } else if (this.env.actionSpace.class == 'Box') {
-            l = tf.layers.dense({units: this.env.actionSpace.shape[0], activation: 'linear'}).apply(l)
+            l = tf.layers.dense({
+                units: this.env.actionSpace.shape[0], 
+                kernelInitializer: 'glorotNormal'
+            }).apply(l)
         } else {
             throw new Error('Unknown action space class: ' + this.env.actionSpace.class)
         }
         this.actor = tf.model({inputs: input, outputs: l})
 
         var input = tf.layers.input({shape: this.env.observationSpace.shape})
-        var l = tf.layers.dense({units: 16, activation: 'relu'}).apply(input)
-        var l = tf.layers.dense({units: 1, activation: 'linear'}).apply(l)
+        var l = tf.layers.dense({units: 32, activation: 'relu'}).apply(input)
+        l = tf.layers.dense({units: 32, activation: 'relu'}).apply(l)
+        l = tf.layers.dense({units: 1, activation: 'linear', kernelInitializer: 'glorotNormal'}).apply(l)
         this.critic = tf.model({inputs: input, outputs: l})
 
         if (this.env.actionSpace.class == 'Box') {
-            this.logStd = tf.variable(tf.zeros([1, this.env.actionSpace.shape[0]]))
+            this.logStd = tf.variable(tf.zeros([this.env.actionSpace.shape[0]]), true, 'logStd')
         }
 
         this.buffer = new Buffer(config)
@@ -196,29 +274,64 @@ class PPO {
         this.optValue = tf.train.adam(this.config.valueLearningRate)
     }
 
-    sampleAction(observation) {
-        const preds = this.actor.predict(tf.tensor([observation]))
-        let action 
-        if (this.env.actionSpace.class == 'Discrete') {
-            action = tf.multinomial(preds, 1)
-        } else if (this.env.actionSpace.class == 'Box') {
-            action = tf.add(
-                tf.mul(
-                    tf.randomNormal([1, this.env.actionSpace.shape[0]]), 
-                    tf.exp(this.logStd)
-                ),
-                preds
+    sampleAction(observationT) {
+        return tf.tidy(() => {
+            const preds = tf.squeeze(this.actor.predict(observationT), 0)
+            let action 
+            if (this.env.actionSpace.class == 'Discrete') {
+                action = tf.squeeze(tf.multinomial(preds, 1), 0) // > []
+            } else if (this.env.actionSpace.class == 'Box') {
+                action = tf.add(
+                    tf.mul(
+                        tf.randomStandardNormal([this.env.actionSpace.shape[0]]), 
+                        tf.exp(this.logStd)
+                    ),
+                    preds
+                ) // > [actionSpace.shape[0]]
+            }
+            return [preds, action]
+        })
+    }
+
+    logProbCategorical(logits, x) {
+        return tf.tidy(() => {
+            const numActions = logits.shape[logits.shape.length - 1]
+            const logprobabilitiesAll = tf.logSoftmax(logits)
+            return tf.sum(
+                tf.mul(tf.oneHot(x, numActions), logprobabilitiesAll),
+                logprobabilitiesAll.shape.length - 1
             )
-        }
-        return [preds, action]
+        })
+    }
+    
+    logProbNormal(loc, scale, x) {
+        return tf.tidy(() => {
+            const logUnnormalized = tf.mul(
+                -0.5,
+                tf.square(
+                    tf.sub(
+                        tf.div(x, scale),
+                        tf.div(loc, scale)
+                    )
+                )
+            )
+            const logNormalization = tf.add(
+                tf.scalar(0.5 * Math.log(2.0 * Math.PI)),
+                tf.log(scale)
+            )
+            return tf.sum(
+                tf.sub(logUnnormalized, logNormalization),
+                logUnnormalized.shape.length - 1
+            )
+        })
     }
 
     logProb(preds, actions) {
         // Preds can be logits or means
         if (this.env.actionSpace.class == 'Discrete') {
-            return logProbCategorical(preds, actions)
+            return this.logProbCategorical(preds, actions)
         } else if (this.env.actionSpace.class == 'Box') {
-            return logProbNormal(preds, tf.exp(this.logStd), actions)
+            return this.logProbNormal(preds, tf.exp(this.logStd), actions)
         }
     }
     
@@ -226,48 +339,50 @@ class PPO {
         return this.actor.predict(observation)
     }
 
-    trainPolicy(observationBuffer, actionBuffer, logprobabilityBuffer, advantageBuffer) {
-        observationBuffer = tf.tensor(observationBuffer)
-    
+    trainPolicy(observationBufferT, actionBufferT, logprobabilityBufferT, advantageBufferT) {
         var optFunc = () => {
-            var preds = this.actor.predict(observationBuffer) // -> Logits or means
-            var ratio = tf.exp(tf.sub(
-                this.logProb(preds, actionBuffer),
-                logprobabilityBuffer
-            ))
-            var minAdvantage = tf.where(
-                tf.greater(advantageBuffer, 0),
-                tf.mul(tf.add(1, this.config.clipRatio), advantageBuffer),
-                tf.mul(tf.sub(1, this.config.clipRatio), advantageBuffer)
+            const predsT = this.actor.predict(observationBufferT) // -> Logits or means
+            const diffT = tf.sub(
+                this.logProb(predsT, actionBufferT),
+                logprobabilityBufferT
             )
-            var policyLoss = tf.neg(tf.mean(
-                tf.minimum(tf.mul(ratio, advantageBuffer), minAdvantage)
+            const ratioT = tf.exp(diffT)
+            const minAdvantageT = tf.where(
+                tf.greater(advantageBufferT, 0),
+                tf.mul(tf.add(1, this.config.clipRatio), advantageBufferT),
+                tf.mul(tf.sub(1, this.config.clipRatio), advantageBufferT)
+            )
+            const policyLoss = tf.neg(tf.mean(
+                tf.minimum(tf.mul(ratioT, advantageBufferT), minAdvantageT)
             ))
+            // log('[Train Policy] preds:', preds.arraySync(), preds.shape)
+            // log('[Train Policy] actionBuffer:', actionBuffer)
+            // log('[Train Policy] logProb:', logProb.arraySync())
+            // log('[Train Policy] diff:', diff.arraySync())
+            // log('[Train Policy] ratio:', ratio.arraySync())
+            // log('[Train Policy] logprobabilityBuffer:', logprobabilityBuffer)
+            // log('[Train Policy] advantageBuffer:', advantageBuffer)
+            // log('[Train Policy] policyLoss:', policyLoss.arraySync())
             return policyLoss
         }
     
-        tf.tidy(() => {
-            var {values, grads} = this.optPolicy.computeGradients(optFunc)
+        return tf.tidy(() => {
+            const {values, grads} = this.optPolicy.computeGradients(optFunc)
+            // log('logStd grads:', grads.logStd.arraySync())
+            // log('denseKernel grads (avg):', tf.mean(grads['dense_Dense1/kernel']).arraySync())
             this.optPolicy.applyGradients(grads)
+            const kl = tf.mean(tf.sub(
+                logprobabilityBufferT,
+                this.logProb(this.actor.predict(observationBufferT), actionBufferT)
+            ))
+            return kl.arraySync()
         })
-    
-        var kl = tf.mean(tf.sub(
-            logprobabilityBuffer,
-            this.logProb(this.actor.predict(observationBuffer), actionBuffer)
-        ))
-        // kl = tf.sum(kl) // TODO: ?
-    
-        return kl
     }
 
-    trainValue(observationBuffer, returnBuffer) {
-        observationBuffer = tf.tensor(observationBuffer)
-        returnBuffer = tf.tensor(returnBuffer).reshape([-1, 1])
-    
+    trainValue(observationBufferT, returnBufferT) {
         var optFunc = () => {
-            const valuesPred = this.critic.predict(observationBuffer)
-            const loss = tf.losses.meanSquaredError(returnBuffer, valuesPred)
-            return loss
+            const valuesPredT = this.critic.predict(observationBufferT)
+            return tf.losses.meanSquaredError(returnBufferT, valuesPredT)
         }
                 
         tf.tidy(() => {
@@ -304,24 +419,42 @@ class PPO {
         var sumLength = 0
         var numEpisodes = 0
 
+        var allPreds = []
+        var allActions = []
+        var allClippedActions = []
+
         for (let step = 0; step < this.config.nSteps; step++) {
             // Predict action, value and logprob from last observation
-            var [preds, action] = this.sampleAction(this.lastObservation)
-            console.log('preds:', preds.arraySync(), preds.shape)
-            console.log('action:', action.arraySync(), action.shape)
-            action = action.arraySync()[0][0]
-            var valueT = this.critic.predict(tf.tensor([this.lastObservation]))
-            console.log('valueT:', valueT.arraySync(), valueT.shape)
-            valueT = valueT.arraySync()[0][0]        
-            var logprobabilityT = this.logProb(preds, action)
-            console.log('logprobabilityT:', logprobabilityT.arraySync(), logprobabilityT.shape)
-            logprobabilityT = logprobabilityT.arraySync()[0]
-            process.exit()
+            const [preds, action, value, logprobability] = tf.tidy(() => {
+                const lastObservationT = tf.tensor([this.lastObservation])
+                const [predsT, actionT] = this.sampleAction(lastObservationT)
+                const valueT = this.critic.predict(lastObservationT)
+                const logprobabilityT = this.logProb(predsT, actionT)
+                return [
+                    predsT.arraySync(), // -> Discrete: [actionSpace.n] or Box: [actionSpace.shape[0]]
+                    actionT.arraySync(), // -> Discrete: [] or Box: [actionSpace.shape[0]]
+                    valueT.arraySync()[0][0],
+                    logprobabilityT.arraySync()
+                ]
+            })
+            allPreds.push(preds)
+            allActions.push(action)
 
-            // TODO: Rescale for continuous action space
+            // Rescale for continuous action space
+            let clippedAction = action
+            if (this.env.actionSpace.class == 'Box') {
+                let h = this.env.actionSpace.high
+                let l = this.env.actionSpace.low
+                if (typeof h === 'number' && typeof l === 'number') {
+                    clippedAction = action.map(a => {
+                        return Math.min(Math.max(a, l), h)
+                    })
+                }
+            }
+            allClippedActions.push(clippedAction)
 
             // Take action in environment
-            var [newObservation, reward, done] = await this.env.step(action)
+            const [newObservation, reward, done] = await this.env.step(clippedAction)
             sumReturn += reward
             sumLength += 1
 
@@ -334,32 +467,35 @@ class PPO {
                 this.lastObservation, 
                 action, 
                 reward, 
-                valueT, 
-                logprobabilityT
+                value, 
+                logprobability
             )
             
             this.lastObservation = newObservation
             
             if (done || step === this.config.nSteps - 1) {
-                //log('end:', observation)
-                const lastValue = done ? 0 : this.critic.predict(tf.tensor([newObservation])).arraySync()[0][0]
+                const lastValue = done 
+                    ? 0 
+                    : tf.tidy(() => this.critic.predict(tf.tensor([newObservation])).arraySync())[0][0]
                 this.buffer.finishTrajectory(lastValue)
                 numEpisodes += 1
                 this.lastObservation = this.env.reset()
-                // log('Start:', observation)
             }
         }
             
-        log(`Timesteps: ${this.numTimesteps}, Episodes: ${numEpisodes}`)
-        log(`Avg returns: ${sumReturn / numEpisodes}`)
-        log(`Avg length: ${sumLength / numEpisodes}`)
+        // log(`Timesteps: ${this.numTimesteps}, Episodes: ${numEpisodes}`)
+        // log(`Avg returns: ${sumReturn / numEpisodes}`)
+        // log(`Avg length: ${sumLength / numEpisodes}`)
+        // log('All preds (avg):', tf.mean(tf.tensor(allPreds), 0).arraySync())
+        // log('All actions (avg):', tf.mean(tf.tensor(allActions), 0).arraySync())
+        // log('All clipped actions (avg):', tf.mean(tf.tensor(allClippedActions), 0).arraySync())
 
         callback.onRolloutEnd(this)
     }
 
     async train(config) {
         // Get values from the buffer
-        var [
+        const [
             observationBuffer,
             actionBuffer,
             advantageBuffer,
@@ -367,19 +503,39 @@ class PPO {
             logprobabilityBuffer,
         ] = this.buffer.get()
 
-        log('Train policy net...')
-        for (let i = 0; i < this.config.policyIterations; i++) {
-            var kl = this.trainPolicy(observationBuffer, actionBuffer, logprobabilityBuffer, advantageBuffer)
+        const [
+            observationBufferT,
+            actionBufferT,
+            advantageBufferT,
+            returnBufferT,
+            logprobabilityBufferT
+        ] = tf.tidy(() => [
+            tf.tensor(observationBuffer),
+            tf.tensor(actionBuffer, null, this.env.actionSpace.dtype),
+            tf.tensor(advantageBuffer),
+            tf.tensor(returnBuffer).reshape([-1, 1]),
+            tf.tensor(logprobabilityBuffer)
+        ])
+
+        for (let i = 0; i < this.config.nEpochs; i++) {
+            const kl = this.trainPolicy(observationBufferT, actionBufferT, logprobabilityBufferT, advantageBufferT)
             if (kl > 1.5 * this.config.targetKL) {
-                log('Break')
                 break
             }
         }
 
         log('Train value net...')
-        for (let i = 0;  i < this.config.valueIterations; i++) {
-            this.trainValue(observationBuffer, returnBuffer)
+        for (let i = 0;  i < this.config.nEpochs; i++) {
+            this.trainValue(observationBufferT, returnBufferT)
         }
+
+        tf.dispose([
+            observationBufferT, 
+            actionBufferT,
+            advantageBufferT,
+            returnBufferT,
+            logprobabilityBufferT
+        ])
     }
 
     async learn(learnConfig) {
@@ -415,4 +571,6 @@ class PPO {
     }
 }
 
-module.exports = PPO
+if (typeof module === 'object' && module.exports) {
+    module.exports = PPO
+}

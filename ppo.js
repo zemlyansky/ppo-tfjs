@@ -1,5 +1,4 @@
 // Check if node
-// if (typeof window === 'undefined') {
 if (typeof module === 'object' && module.exports) {
     var tf = require('@tensorflow/tfjs-node-gpu')
 }
@@ -222,35 +221,9 @@ class PPO {
         // Initialize buffer
         this.buffer = new Buffer(config)
 
-        // Initialize actor
-        const input = tf.layers.input({shape: this.env.observationSpace.shape})
-        let l = input
-        this.config.netArch.pi.forEach((units, i) => {
-            l = tf.layers.dense({units, activation: this.config.activation}).apply(l)
-        })
-        if (this.env.actionSpace.class == 'Discrete') {
-            l = tf.layers.dense({
-                units: this.env.actionSpace.n, 
-                kernelInitializer: 'glorotNormal'
-            }).apply(l)
-        } else if (this.env.actionSpace.class == 'Box') {
-            l = tf.layers.dense({
-                units: this.env.actionSpace.shape[0], 
-                kernelInitializer: 'glorotNormal'
-            }).apply(l)
-        } else {
-            throw new Error('Unknown action space class: ' + this.env.actionSpace.class)
-        }
-        this.actor = tf.model({inputs: input, outputs: l})
-
-        // Initialize critic
-        var input = tf.layers.input({shape: this.env.observationSpace.shape})
-        let l = input
-        this.config.netArch.vf.forEach((units, i) => {
-            l = tf.layers.dense({units: units, activation: this.config.activation}).apply(l)
-        })
-        l = tf.layers.dense({units: 1, activation: 'linear'}).apply(l)
-        this.critic = tf.model({inputs: input, outputs: l})
+        // Initialize models for actor and critic
+        this.actor = this.createActor()
+        this.critic = this.createCritic()
 
         // Initialize logStd (for continuous action space)
         if (this.env.actionSpace.class == 'Box') {
@@ -260,6 +233,48 @@ class PPO {
         // Initialize optimizers
         this.optPolicy = tf.train.adam(this.config.policyLearningRate)
         this.optValue = tf.train.adam(this.config.valueLearningRate)
+    }
+
+    createActor() {
+        const input = tf.layers.input({shape: this.env.observationSpace.shape})
+        let l = input
+        this.config.netArch.pi.forEach((units, i) => {
+            l = tf.layers.dense({
+                units, 
+                activation: this.config.activation
+            }).apply(l)
+        })
+        if (this.env.actionSpace.class == 'Discrete') {
+            l = tf.layers.dense({
+                units: this.env.actionSpace.n, 
+                // kernelInitializer: 'glorotNormal'
+            }).apply(l)
+        } else if (this.env.actionSpace.class == 'Box') {
+            l = tf.layers.dense({
+                units: this.env.actionSpace.shape[0], 
+                // kernelInitializer: 'glorotNormal'
+            }).apply(l)
+        } else {
+            throw new Error('Unknown action space class: ' + this.env.actionSpace.class)
+        }
+        return tf.model({inputs: input, outputs: l})
+    }
+
+    createCritic() {
+        // Initialize critic
+        var input = tf.layers.input({shape: this.env.observationSpace.shape})
+        let l = input
+        this.config.netArch.vf.forEach((units, i) => {
+            l = tf.layers.dense({
+                units: units, 
+                activation: this.config.activation
+            }).apply(l)
+        })
+        l = tf.layers.dense({
+            units: 1, 
+            activation: 'linear'
+        }).apply(l)
+        return tf.model({inputs: input, outputs: l})
     }
 
     sampleAction(observationT) {

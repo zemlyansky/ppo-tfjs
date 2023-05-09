@@ -1,0 +1,34 @@
+{
+  "name": "ppo-tfjs",
+  "version": "0.0.1",
+  "description": "Proximal Policy Optimization (PPO) in Tensorflow.js",
+  "keywords": [
+    "reinforcement learning", "ppo", "tensorflow.js", "tfjs"
+  ],
+  "main": "ppo.js",
+  "scripts": {
+    "test": "jest",
+    "watch": "jest --watchAll"
+  },
+  "author": "Anton Zemlyansky",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zemlyansky/ppo-tfjs.git"
+  },
+  "dependencies": {
+    "@tensorflow/tfjs-node-gpu": "^3.21.0",
+    "nqdm": "^2.0.2"
+  },
+  "devDependencies": {
+    "jest": "^29.5.0",
+    "nodemon": "^2.0.22"
+  },
+  "jest": {
+    "collectCoverage": true,
+    "modulePathIgnorePatterns": [
+      "temp/",
+      "node_modules/"
+    ]
+  }
+}

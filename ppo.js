@@ -5,7 +5,7 @@ if (typeof module === 'object' && module.exports) {
 }
 
 function log () {
-    // console.log('[PPO]', ...arguments)
+    console.log('[PPO]', ...arguments)
 }
 
 class BaseCallback {
@@ -92,18 +92,12 @@ class DictCallback extends BaseCallback {
     }
 }
 
-
-
-
-
-
-const bufferConfigDefault = {
-    gamma: 0.99,
-    lam: 0.95
-}
-
 class Buffer {
     constructor(bufferConfig) {
+        const bufferConfigDefault = {
+            gamma: 0.99,
+            lam: 0.95
+        }
         this.bufferConfig = Object.assign({}, bufferConfigDefault, bufferConfig)
         this.gamma = this.bufferConfig.gamma
         this.lam = this.bufferConfig.lam
@@ -111,7 +105,6 @@ class Buffer {
     }
 
     add(observation, action, reward, value, logprobability) {
-        // log('!', action)
         this.observationBuffer.push(observation.slice(0))
         this.actionBuffer.push(action)
         this.rewardBuffer.push(reward)
@@ -121,8 +114,8 @@ class Buffer {
     }
 
     discountedCumulativeSums (arr, coeff) {
-        var res = []
-        var s = 0
+        let res = []
+        let s = 0
         arr.reverse().forEach(v => {
             s = v + s * coeff
             res.push(s)
@@ -131,35 +124,21 @@ class Buffer {
     }
 
     finishTrajectory(lastValue) {
-        //log('>', this.rewardBuffer, this.rewardBuffer.length)
-        var rewards = this.rewardBuffer
+        const rewards = this.rewardBuffer
             .slice(this.trajectoryStartIndex, this.pointer)
             .concat(lastValue * this.gamma)
-        //log('>', rewards, rewards.length)
-        var values = this.valueBuffer
+        const values = this.valueBuffer
             .slice(this.trajectoryStartIndex, this.pointer)
             .concat(lastValue)
-        //log('>', values, values.length)
-        var deltas = rewards
+        const deltas = rewards
             .slice(0, -1)
             .map((reward, ri) => reward - (values[ri] - this.gamma * values[ri + 1]))
-        //log('deltas>', deltas.length)
-        
         this.advantageBuffer = this.advantageBuffer
             .concat(this.discountedCumulativeSums(deltas, this.gamma * this.lam))
         this.returnBuffer = this.returnBuffer
             .concat(this.discountedCumulativeSums(rewards, this.gamma).slice(0, -1))
-                
         this.trajectoryStartIndex = this.pointer
 
-        // log('>', this.observationBuffer.length)
-        // log('!', this.actionBuffer)
-        // log('>', this.advantageBuffer.length)
-        // log('>', this.returnBuffer.length)
-        // log('>', this.rewardBuffer.length)
-        // log('>', deltas.length)
-
-        // process.exit(0)
     }
 
     get() {
@@ -194,30 +173,6 @@ class Buffer {
 
 }
 
-/*
-class ActorCriticPolicy {
-    constructor(policyConfig) {
-        const policyConfigDefault = {
-            netArch: {
-                'pi': [16, 16],
-                'vf': [16, 16]
-            },
-            activationFn: 'tanh',
-            shareFeaturesExtractor: true,
-        }
-        this.policyConfig = Object.assign({}, policyConfigDefault, policyConfig)
-        this.observationSpace = this.policyConfig.observationSpace
-        this.actionSpace = this.policyConfig.actionSpace
-        this.netArch = this.policyConfig.netArch
-        this.activationFn = this.policyConfig.activationFn
-        this.shareFeaturesExtractor = this.policyConfig.shareFeaturesExtractor
-    }
-    
-    _makeFeaturesExtractor() {
-    }
-}
-*/
-
 class PPO {
     constructor(env, config) {
         const configDefault = {
@@ -228,21 +183,51 @@ class PPO {
             clipRatio: 0.2,
             targetKL: 0.01,
             useSDE: false, // TODO: State Dependent Exploration (gSDE)
+            netArch: {
+                'pi': [32, 32],
+                'vf': [32, 32]
+            },
+            activation: 'relu',
+            verbose: 0
+        }
+        this.config = Object.assign({}, configDefault, config)
+
+        // Prepare network architecture
+        if (Array.isArray(this.config.netArch)) {
+            this.config.netArch = {
+                'pi': this.config.netArch,
+                'vf': this.config.netArch
+            }
         }
 
-        this.config = Object.assign({}, configDefault, config)
+        // Initialize logger
+        this.log = (...args) => {
+            if (this.config.verbose > 0) {
+                console.log('[PPO]', ...args)
+            }
+        }
+
+        // Initialize environment
         this.env = env
         if ((this.env.actionSpace.class == 'Discrete') && !this.env.actionSpace.dtype) {
             this.env.actionSpace.dtype = 'int32'
         } else if ((this.env.actionSpace.class == 'Box') && !this.env.actionSpace.dtype) {
             this.env.actionSpace.dtype = 'float32'
         }
+
+        // Initialize counters
         this.numTimesteps = 0
         this.lastObservation = null
 
-        var input = tf.layers.input({shape: this.env.observationSpace.shape})
-        var l = tf.layers.dense({units: 32, activation: 'relu'}).apply(input)
-        l = tf.layers.dense({units: 32, activation: 'relu'}).apply(l)
+        // Initialize buffer
+        this.buffer = new Buffer(config)
+
+        // Initialize actor
+        const input = tf.layers.input({shape: this.env.observationSpace.shape})
+        let l = input
+        this.config.netArch.pi.forEach((units, i) => {
+            l = tf.layers.dense({units, activation: this.config.activation}).apply(l)
+        })
         if (this.env.actionSpace.class == 'Discrete') {
             l = tf.layers.dense({
                 units: this.env.actionSpace.n, 
@@ -258,18 +243,21 @@ class PPO {
         }
         this.actor = tf.model({inputs: input, outputs: l})
 
+        // Initialize critic
         var input = tf.layers.input({shape: this.env.observationSpace.shape})
-        var l = tf.layers.dense({units: 32, activation: 'relu'}).apply(input)
-        l = tf.layers.dense({units: 32, activation: 'relu'}).apply(l)
-        l = tf.layers.dense({units: 1, activation: 'linear', kernelInitializer: 'glorotNormal'}).apply(l)
+        let l = input
+        this.config.netArch.vf.forEach((units, i) => {
+            l = tf.layers.dense({units: units, activation: this.config.activation}).apply(l)
+        })
+        l = tf.layers.dense({units: 1, activation: 'linear'}).apply(l)
         this.critic = tf.model({inputs: input, outputs: l})
 
+        // Initialize logStd (for continuous action space)
         if (this.env.actionSpace.class == 'Box') {
             this.logStd = tf.variable(tf.zeros([this.env.actionSpace.shape[0]]), true, 'logStd')
         }
 
-        this.buffer = new Buffer(config)
-
+        // Initialize optimizers
         this.optPolicy = tf.train.adam(this.config.policyLearningRate)
         this.optValue = tf.train.adam(this.config.valueLearningRate)
     }
@@ -355,21 +343,11 @@ class PPO {
             const policyLoss = tf.neg(tf.mean(
                 tf.minimum(tf.mul(ratioT, advantageBufferT), minAdvantageT)
             ))
-            // log('[Train Policy] preds:', preds.arraySync(), preds.shape)
-            // log('[Train Policy] actionBuffer:', actionBuffer)
-            // log('[Train Policy] logProb:', logProb.arraySync())
-            // log('[Train Policy] diff:', diff.arraySync())
-            // log('[Train Policy] ratio:', ratio.arraySync())
-            // log('[Train Policy] logprobabilityBuffer:', logprobabilityBuffer)
-            // log('[Train Policy] advantageBuffer:', advantageBuffer)
-            // log('[Train Policy] policyLoss:', policyLoss.arraySync())
             return policyLoss
         }
     
         return tf.tidy(() => {
             const {values, grads} = this.optPolicy.computeGradients(optFunc)
-            // log('logStd grads:', grads.logStd.arraySync())
-            // log('denseKernel grads (avg):', tf.mean(grads['dense_Dense1/kernel']).arraySync())
             this.optPolicy.applyGradients(grads)
             const kl = tf.mean(tf.sub(
                 logprobabilityBufferT,
@@ -403,8 +381,6 @@ class PPO {
             return new DictCallback(callback)
         }
         return new BaseCallback() 
-        // TODO:List
-        // TODO:Class
     }
 
     async collectRollouts(callback) {
@@ -483,13 +459,6 @@ class PPO {
             }
         }
             
-        // log(`Timesteps: ${this.numTimesteps}, Episodes: ${numEpisodes}`)
-        // log(`Avg returns: ${sumReturn / numEpisodes}`)
-        // log(`Avg length: ${sumLength / numEpisodes}`)
-        // log('All preds (avg):', tf.mean(tf.tensor(allPreds), 0).arraySync())
-        // log('All actions (avg):', tf.mean(tf.tensor(allActions), 0).arraySync())
-        // log('All clipped actions (avg):', tf.mean(tf.tensor(allClippedActions), 0).arraySync())
-
         callback.onRolloutEnd(this)
     }
 
@@ -524,7 +493,6 @@ class PPO {
             }
         }
 
-        log('Train value net...')
         for (let i = 0;  i < this.config.nEpochs; i++) {
             this.trainValue(observationBufferT, returnBufferT)
         }
@@ -555,8 +523,6 @@ class PPO {
         let iteration = 0
         
         callback.onTrainingStart(this)
-
-        log('Start')
 
         while (this.numTimesteps < totalTimesteps) {
             await this.collectRollouts(callback)

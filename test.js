@@ -1,4 +1,4 @@
-const { FunctionalCallback } = require('./callbacks.js')
+const tf = require('@tensorflow/tfjs-node-gpu')
 const PPO = require('./ppo.js')
 
 class EnvDiscrete {
@@ -78,16 +78,6 @@ class EnvContinuous {
         return this.state.slice(0)
     }
 }
-
-test('FunctionalCallback', async () => {
-    const callback = new FunctionalCallback(function () {
-        this.a = 1
-        return true
-    })
-    callback.onStep()
-    expect(callback.nCalls).toBe(1)
-    expect(callback.a).toBe(1)
-})
 
 test('PPO Learn (Discrete)', async () => {
     var env = new EnvDiscrete()

@@ -1,6 +1,6 @@
 // Check if node
 if (typeof module === 'object' && module.exports) {
-    var tf = require('@tensorflow/tfjs-node-gpu')
+    var tf = require('@tensorflow/tfjs')
 }
 
 function log () {
@@ -262,7 +262,7 @@ class PPO {
 
     createCritic() {
         // Initialize critic
-        var input = tf.layers.input({shape: this.env.observationSpace.shape})
+        const input = tf.layers.input({shape: this.env.observationSpace.shape})
         let l = input
         this.config.netArch.vf.forEach((units, i) => {
             l = tf.layers.dense({
@@ -343,7 +343,7 @@ class PPO {
     }
 
     trainPolicy(observationBufferT, actionBufferT, logprobabilityBufferT, advantageBufferT) {
-        var optFunc = () => {
+        const optFunc = () => {
             const predsT = this.actor.predict(observationBufferT) // -> Logits or means
             const diffT = tf.sub(
                 this.logProb(predsT, actionBufferT),
@@ -373,13 +373,13 @@ class PPO {
     }
 
     trainValue(observationBufferT, returnBufferT) {
-        var optFunc = () => {
+        const optFunc = () => {
             const valuesPredT = this.critic.predict(observationBufferT)
             return tf.losses.meanSquaredError(returnBufferT, valuesPredT)
         }
                 
         tf.tidy(() => {
-            var {values, grads} = this.optValue.computeGradients(optFunc)
+            const {values, grads} = this.optValue.computeGradients(optFunc)
             this.optValue.applyGradients(grads)
         })
     }
@@ -406,13 +406,13 @@ class PPO {
         this.buffer.reset()
         callback.onRolloutStart(this)
 
-        var sumReturn = 0
-        var sumLength = 0
-        var numEpisodes = 0
+        let sumReturn = 0
+        let sumLength = 0
+        let numEpisodes = 0
 
-        var allPreds = []
-        var allActions = []
-        var allClippedActions = []
+        const allPreds = []
+        const allActions = []
+        const allClippedActions = []
 
         for (let step = 0; step < this.config.nSteps; step++) {
             // Predict action, value and logprob from last observation

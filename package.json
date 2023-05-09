@@ -16,12 +16,9 @@
     "type": "git",
     "url": "https://github.com/zemlyansky/ppo-tfjs.git"
   },
-  "dependencies": {
-    "@tensorflow/tfjs-node-gpu": "^3.21.0",
-    "nqdm": "^2.0.2"
-  },
   "devDependencies": {
     "jest": "^29.5.0",
+    "@tensorflow/tfjs-node-gpu": "^3.21.0",
     "nodemon": "^2.0.22"
   },
   "jest": {
